@@ -13,6 +13,7 @@ package org.webrtc;
 import android.media.MediaCodecInfo;
 
 import org.telegram.messenger.voip.Instance;
+import org.telegram.messenger.voip.VoIPService;
 
 import androidx.annotation.Nullable;
 
@@ -33,6 +34,9 @@ public class HardwareVideoDecoderFactory extends MediaCodecVideoDecoderFactory {
             for (int a = 0; a < types.length; a++) {
                 switch (types[a]) {
                     case "video/x-vnd.on2.vp8":
+                        if (VoIPService.getSharedInstance() != null && VoIPService.getSharedInstance().groupCall != null) {
+                            return false;
+                        }
                         return config.enable_vp8_decoder;
                     case "video/x-vnd.on2.vp9":
                         return config.enable_vp9_decoder;

@@ -44,8 +44,6 @@ import org.telegram.messenger.FileLog;
 import org.telegram.messenger.R;
 import org.telegram.messenger.Utilities;
 
-import ua.itaysonlab.catogram.CatogramConfig;
-
 public class DrawerLayoutContainer extends FrameLayout {
 
     private static final int MIN_DRAWER_MARGIN = 64;
@@ -79,7 +77,7 @@ public class DrawerLayoutContainer extends FrameLayout {
     private float scrimOpacity;
     private Drawable shadowLeft;
     private boolean allowOpenDrawer;
-    private boolean allowOpenDrawerBySwipe = !CatogramConfig.INSTANCE.getRedesign_SlideDrawer();
+    private boolean allowOpenDrawerBySwipe = true;
 
     private float drawerPosition;
     private boolean drawerOpened;
@@ -206,13 +204,15 @@ public class DrawerLayoutContainer extends FrameLayout {
         if (drawerLayout.getVisibility() != newVisibility) {
             drawerLayout.setVisibility(newVisibility);
         }
-        BaseFragment currentFragment = parentActionBarLayout.fragmentsStack.get(0);
-        if (drawerPosition == drawerLayout.getMeasuredWidth()) {
-            currentFragment.setProgressToDrawerOpened(1f);
-        } else if (drawerPosition == 0){
-            currentFragment.setProgressToDrawerOpened(0);
-        } else {
-            currentFragment.setProgressToDrawerOpened(drawerPosition / drawerLayout.getMeasuredWidth());
+        if (!parentActionBarLayout.fragmentsStack.isEmpty()) {
+            BaseFragment currentFragment = parentActionBarLayout.fragmentsStack.get(0);
+            if (drawerPosition == drawerLayout.getMeasuredWidth()) {
+                currentFragment.setProgressToDrawerOpened(1f);
+            } else if (drawerPosition == 0) {
+                currentFragment.setProgressToDrawerOpened(0);
+            } else {
+                currentFragment.setProgressToDrawerOpened(drawerPosition / drawerLayout.getMeasuredWidth());
+            }
         }
         setScrimOpacity(drawerPosition / (float) drawerLayout.getMeasuredWidth());
     }
@@ -315,7 +315,6 @@ public class DrawerLayoutContainer extends FrameLayout {
     }
 
     public void setAllowOpenDrawer(boolean value, boolean animated) {
-        if (CatogramConfig.INSTANCE.getRedesign_SlideDrawer()) value = false;
         allowOpenDrawer = value;
         if (!allowOpenDrawer && drawerPosition != 0) {
             if (!animated) {
@@ -325,6 +324,10 @@ public class DrawerLayoutContainer extends FrameLayout {
                 closeDrawer(true);
             }
         }
+    }
+
+    public boolean isAllowOpenDrawer() {
+        return allowOpenDrawer;
     }
 
     public void setAllowOpenDrawerBySwipe(boolean value) {

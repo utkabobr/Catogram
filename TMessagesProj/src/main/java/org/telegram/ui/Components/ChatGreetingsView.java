@@ -82,11 +82,6 @@ public class ChatGreetingsView extends LinearLayout {
             TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(sticker.thumbs, 90);
             stickerToSendView.setImage(ImageLocation.getForDocument(sticker), createFilter(sticker), ImageLocation.getForDocument(thumb, sticker), null, 0, sticker);
         }
-        stickerToSendView.setOnClickListener(v -> {
-            if (listener != null) {
-                listener.onGreetings(sticker);
-            }
-        });
     }
 
     public static String createFilter(TLRPC.Document document) {
@@ -130,7 +125,6 @@ public class ChatGreetingsView extends LinearLayout {
     private void updateColors() {
         titleView.setTextColor(Theme.getColor(Theme.key_chat_serviceText));
         descriptionView.setTextColor(Theme.getColor(Theme.key_chat_serviceText));
-        setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(10), Theme.getColor(Theme.key_chat_serviceBackground)));
     }
 
     public void setListener(Listener listener) {

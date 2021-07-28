@@ -17,7 +17,6 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
@@ -25,9 +24,11 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.graphics.Point;
 import android.graphics.Shader;
-import android.graphics.drawable.BitmapDrawable;
 import android.location.LocationManager;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -40,7 +41,9 @@ import android.provider.ContactsContract;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Base64;
+import android.util.TypedValue;
 import android.view.ActionMode;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MotionEvent;
@@ -54,6 +57,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -65,8 +69,6 @@ import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.anjlab.android.iab.v3.BillingProcessor;
-import com.anjlab.android.iab.v3.TransactionDetails;
 import com.google.android.gms.common.api.Status;
 import com.google.firebase.appindexing.Action;
 import com.google.firebase.appindexing.FirebaseUserActions;
@@ -99,6 +101,7 @@ import org.telegram.messenger.UserObject;
 import org.telegram.messenger.Utilities;
 import org.telegram.messenger.browser.Browser;
 import org.telegram.messenger.camera.CameraController;
+import org.telegram.messenger.voip.VideoCapturerDevice;
 import org.telegram.messenger.voip.VoIPPendingCall;
 import org.telegram.messenger.voip.VoIPService;
 import org.telegram.tgnet.ConnectionsManager;
@@ -108,6 +111,7 @@ import org.telegram.ui.ActionBar.ActionBarLayout;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.DrawerLayoutContainer;
+import org.telegram.ui.ActionBar.SimpleTextView;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Adapters.DrawerLayoutAdapter;
 import org.telegram.ui.Cells.DrawerAddCell;
@@ -119,19 +123,23 @@ import org.telegram.ui.Components.AudioPlayerAlert;
 import org.telegram.ui.Components.BlockingUpdateView;
 import org.telegram.ui.Components.Bulletin;
 import org.telegram.ui.Components.BulletinFactory;
+import org.telegram.ui.Components.CubicBezierInterpolator;
 import org.telegram.ui.Components.Easings;
 import org.telegram.ui.Components.EmbedBottomSheet;
 import org.telegram.ui.Components.GroupCallPip;
 import org.telegram.ui.Components.JoinGroupAlert;
 import org.telegram.ui.Components.LayoutHelper;
+import org.telegram.ui.Components.MediaActionDrawable;
 import org.telegram.ui.Components.PasscodeView;
 import org.telegram.ui.Components.PhonebookShareAlert;
 import org.telegram.ui.Components.PipRoundVideoView;
 import org.telegram.ui.Components.RLottieDrawable;
 import org.telegram.ui.Components.RLottieImageView;
+import org.telegram.ui.Components.RadialProgress2;
 import org.telegram.ui.Components.RecyclerListView;
 import org.telegram.ui.Components.SharingLocationsAlert;
 import org.telegram.ui.Components.SideMenultItemAnimator;
+import org.telegram.ui.Components.SizeNotifierFrameLayout;
 import org.telegram.ui.Components.StickerSetBulletinLayout;
 import org.telegram.ui.Components.StickersAlert;
 import org.telegram.ui.Components.TermsOfServiceView;
@@ -145,7 +153,11 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -157,8 +169,7 @@ import ua.itaysonlab.catogram.OTA;
 import ua.itaysonlab.catogram.vkui.CGUIResources;
 import ua.itaysonlab.redesign.BottomSlideFragment;
 
-public class LaunchActivity extends AppCompatActivity implements BillingProcessor.IBillingHandler, BottomSlideFragment.BottomSlideActivityInterface, ActionBarLayout.ActionBarLayoutDelegate, NotificationCenter.NotificationCenterDelegate, DialogsActivity.DialogsActivityDelegate {
-    public BillingProcessor bp;
+public class LaunchActivity extends AppCompatActivity implements  BottomSlideFragment.BottomSlideActivityInterface, ActionBarLayout.ActionBarLayoutDelegate, NotificationCenter.NotificationCenterDelegate, DialogsActivity.DialogsActivityDelegate {
     private List<BottomSlideFragment> slideFragments = new ArrayList<>();
 
     private CGUIResources res = null;
@@ -173,6 +184,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
 
     @Override
     public void addBackPressedListener(BottomSlideFragment fragment) {
+        slideFragments.add(fragment);
         slideFragments.add(fragment);
     }
 
@@ -206,6 +218,9 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
     private static ArrayList<BaseFragment> layerFragmentsStack = new ArrayList<>();
     private static ArrayList<BaseFragment> rightFragmentsStack = new ArrayList<>();
     private ViewTreeObserver.OnGlobalLayoutListener onGlobalLayoutListener;
+    private ArrayList<Parcelable> importingStickers;
+    private ArrayList<String> importingStickersEmoji;
+    private String importingStickersSoftware;
 
     private ActionMode visibleActionMode;
 
@@ -219,7 +234,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
     private ActionBarLayout rightActionBarLayout;
     private FrameLayout shadowTablet;
     private FrameLayout shadowTabletSide;
-    private View backgroundTablet;
+    private SizeNotifierFrameLayout backgroundTablet;
     private FrameLayout frameLayout;
     public DrawerLayoutContainer drawerLayoutContainer;
     private DrawerLayoutAdapter drawerLayoutAdapter;
@@ -230,6 +245,11 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
     private AlertDialog proxyErrorDialog;
     private RecyclerListView sideMenu;
     private SideMenultItemAnimator itemAnimator;
+    private FrameLayout updateLayout;
+    private RadialProgress2 updateLayoutIcon;
+    private SimpleTextView updateTextView;
+    private TextView updateSizeTextView;
+    private FrameLayout sideMenuContainer;
 
     private AlertDialog localeDialog;
     private boolean loadingLocaleDialog;
@@ -255,6 +275,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
     private Runnable lockRunnable;
 
     private static final int PLAY_SERVICES_REQUEST_CHECK_SETTINGS = 140;
+    public static final int SCREEN_CAPTURE_REQUEST_CODE = 520;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -322,20 +343,17 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
 
         super.onCreate(savedInstanceState);
 
-        bp = new BillingProcessor(this, "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAykhjtU7qzFYv4UI8U9uGJITqLTgpvH1SYaMVeMb0EFVABISnKDOWw6eb6LgCU9V+fPOw5TJz/RQ+OrMGuK6DcxZPOxOPRxi0zUAQbP7jiTsYEkUM22gixzKNMI93QgVOxakAl7+c51QMICVLAGFtYZVh+xZ+hX11L+JeSByK8tyPplBliYHOHFsALs3yB9SICZHj18d0hmGjDRcirxr0DMBAaX623EhDzwm/RsL6crK7dPHVWxye4ovYxFMdsx9yi9EAziVx3CCWMN8p9CrVBRDU6pyJ2BLG0a7iGYYVP4JWyFdqrZtzSJWdD8g4rEunsivfH8sl3ICaHO7hnmJaQwIDAQAB", this);
-        bp.initialize();
-        //PlayOTA.init(this);
         if (CatogramConfig.INSTANCE.getAutoOta())
             OTA.download(this, false);
 
         if (Build.VERSION.SDK_INT >= 24) {
             AndroidUtilities.isInMultiwindow = isInMultiWindowMode();
         }
-        Theme.createChatResources(this, false); //TODO optimize
+        Theme.createCommonChatResources();
+        Theme.createDialogsResources(this);
         if (SharedConfig.passcodeHash.length() != 0 && SharedConfig.appLocked) {
             SharedConfig.lastPauseTime = (int) (SystemClock.elapsedRealtime() / 1000);
         }
-        //FileLog.d("UI create5 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         AndroidUtilities.fillStatusBarHeight(this);
         actionBarLayout = new ActionBarLayout(this) {
             @Override
@@ -358,7 +376,13 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             themeSwitchImageView.setVisibility(View.GONE);
         }
 
-        drawerLayoutContainer = new DrawerLayoutContainer(this);
+        drawerLayoutContainer = new DrawerLayoutContainer(this) {
+            @Override
+            protected void onLayout(boolean changed, int l, int t, int r, int b) {
+                super.onLayout(changed, l, t, r, b);
+                setDrawerPosition(getDrawerPosition());
+            }
+        };
         drawerLayoutContainer.setBehindKeyboardColor(Theme.getColor(Theme.key_windowBackgroundWhite));
         frameLayout.addView(drawerLayoutContainer, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
@@ -442,10 +466,14 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             };
             drawerLayoutContainer.addView(launchLayout, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
-            backgroundTablet = new View(this);
-            BitmapDrawable drawable = (BitmapDrawable) getResources().getDrawable(R.drawable.catstile);
-            drawable.setTileModeXY(Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
-            backgroundTablet.setBackgroundDrawable(drawable);
+            backgroundTablet = new SizeNotifierFrameLayout(this) {
+                @Override
+                protected boolean isActionBarVisible() {
+                    return false;
+                }
+            };
+            backgroundTablet.setOccupyStatusBar(false);
+            backgroundTablet.setBackgroundImage(Theme.getCachedWallpaper(), Theme.isWallpaperMotion());
             launchLayout.addView(backgroundTablet, LayoutHelper.createRelative(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
             launchLayout.addView(actionBarLayout);
@@ -505,7 +533,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         } else {
             drawerLayoutContainer.addView(actionBarLayout, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
-        //FileLog.d("UI create7 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
+        sideMenuContainer = new FrameLayout(this);
         sideMenu = new RecyclerListView(this) {
             @Override
             public boolean drawChild(Canvas canvas, View child, long drawingTime) {
@@ -523,19 +551,19 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 return result;
             }
         };
-        //FileLog.d("UI create34 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         itemAnimator = new SideMenultItemAnimator(sideMenu);
         sideMenu.setItemAnimator(itemAnimator);
         sideMenu.setBackgroundColor(Theme.getColor(Theme.key_chats_menuBackground));
         sideMenu.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.VERTICAL, false));
         sideMenu.setAllowItemsInteractionDuringAnimation(false);
         sideMenu.setAdapter(drawerLayoutAdapter = new DrawerLayoutAdapter(this, itemAnimator));
-        drawerLayoutContainer.setDrawerLayout(sideMenu);
-        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) sideMenu.getLayoutParams();
+        sideMenuContainer.addView(sideMenu, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        drawerLayoutContainer.setDrawerLayout(sideMenuContainer);
+        FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) sideMenuContainer.getLayoutParams();
         Point screenSize = AndroidUtilities.getRealScreenSize();
         layoutParams.width = AndroidUtilities.isTablet() ? AndroidUtilities.dp(320) : Math.min(AndroidUtilities.dp(320), Math.min(screenSize.x, screenSize.y) - AndroidUtilities.dp(56));
         layoutParams.height = LayoutHelper.MATCH_PARENT;
-        sideMenu.setLayoutParams(layoutParams);
+        sideMenuContainer.setLayoutParams(layoutParams);
         sideMenu.setOnItemClickListener((view, position, x, y) -> {
             if (position == 0) {
                 DrawerProfileCell profileCell = (DrawerProfileCell) view;
@@ -641,7 +669,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 }
             }
         });
-        //FileLog.d("UI create33 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         final ItemTouchHelper sideMenuTouchHelper = new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
 
             private RecyclerView.ViewHolder selectedViewHolder;
@@ -718,7 +745,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 view.setTranslationY(dY);
             }
         });
-        //FileLog.d("UI create32 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         sideMenuTouchHelper.attachToRecyclerView(sideMenu);
         sideMenu.setOnItemLongClickListener((view, position) -> {
             if (view instanceof DrawerUserCell) {
@@ -751,25 +777,17 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             }
             return false;
         });
-        //FileLog.d("UI create31 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         drawerLayoutContainer.setParentActionBarLayout(actionBarLayout);
         actionBarLayout.setDrawerLayoutContainer(drawerLayoutContainer);
         actionBarLayout.init(mainFragmentsStack);
         actionBarLayout.setDelegate(this);
-        //FileLog.d("UI create30 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         Theme.loadWallpaper();
-        //FileLog.d("UI create8 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
-
-        passcodeView = new PasscodeView(this);
-        drawerLayoutContainer.addView(passcodeView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
         checkCurrentAccount();
         updateCurrentConnectionState(currentAccount);
-
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.closeOtherAppActivities, this);
 
         currentConnectionState = ConnectionsManager.getInstance(currentAccount).getConnectionState();
-        //FileLog.d("UI create10 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.needShowAlert);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.reloadInterface);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.suggestedLangpack);
@@ -782,7 +800,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.notificationsCountUpdated);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.screenStateChanged);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.showBulletin);
-
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.appUpdateAvailable);
         if (actionBarLayout.fragmentsStack.isEmpty()) {
             if (!UserConfig.getInstance(currentAccount).isClientActivated()) {
                 actionBarLayout.addFragmentToStack(new LoginActivity());
@@ -868,12 +886,9 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             }
             drawerLayoutContainer.setAllowOpenDrawer(allowOpen, false);
         }
-        //FileLog.d("UI create11 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         checkLayout();
         checkSystemBarColors();
-        //FileLog.d("UI create12 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         handleIntent(getIntent(), false, savedInstanceState != null, false);
-        //FileLog.d("UI create9 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         try {
             String os1 = Build.DISPLAY;
             String os2 = Build.USER;
@@ -912,7 +927,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         }
         MediaController.getInstance().setBaseActivity(this, true);
         AndroidUtilities.startAppCenter(this);
-        //FileLog.d("UI create time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
+        updateAppUpdateViews(false);
     }
 
     private void openSettings(boolean expanded) {
@@ -1044,10 +1059,13 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.openArticle);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.hasNewContactsToImport);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.needShowPlayServicesAlert);
-            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileDidLoad);
-            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileDidFailToLoad);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileLoaded);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileLoadProgressChanged);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileLoadFailed);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.historyImportProgressChanged);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.groupCallUpdated);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.stickersImportComplete);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.newSuggestionsAvailable);
         }
         currentAccount = UserConfig.selectedAccount;
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.appDidLogout);
@@ -1058,10 +1076,13 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.openArticle);
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.hasNewContactsToImport);
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.needShowPlayServicesAlert);
-        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.fileDidLoad);
-        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.fileDidFailToLoad);
+        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.fileLoaded);
+        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.fileLoadProgressChanged);
+        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.fileLoadFailed);
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.historyImportProgressChanged);
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.groupCallUpdated);
+        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.stickersImportComplete);
+        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.newSuggestionsAvailable);
     }
 
     private void checkLayout() {
@@ -1082,7 +1103,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                     rightActionBarLayout.fragmentsStack.add(chatFragment);
                     a--;
                 }
-                if (passcodeView.getVisibility() != View.VISIBLE) {
+                if (passcodeView == null || passcodeView.getVisibility() != View.VISIBLE) {
                     actionBarLayout.showLastFragment();
                     rightActionBarLayout.showLastFragment();
                 }
@@ -1103,7 +1124,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                     actionBarLayout.fragmentsStack.add(chatFragment);
                     a--;
                 }
-                if (passcodeView.getVisibility() != View.VISIBLE) {
+                if (passcodeView == null || passcodeView.getVisibility() != View.VISIBLE) {
                     actionBarLayout.showLastFragment();
                 }
             }
@@ -1169,9 +1190,13 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         termsOfServiceView.animate().alpha(1f).setDuration(150).setInterpolator(AndroidUtilities.decelerateInterpolator).setListener(null).start();
     }
 
-    private void showPasscodeActivity() {
-        if (passcodeView == null) {
+    public void showPasscodeActivity(boolean fingerprint, boolean animated, int x, int y, Runnable onShow, Runnable onStart) {
+        if (drawerLayoutContainer == null) {
             return;
+        }
+        if (passcodeView == null) {
+            passcodeView = new PasscodeView(this);
+            drawerLayoutContainer.addView(passcodeView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
         }
         SharedConfig.appLocked = true;
         if (SecretMediaViewer.hasInstance() && SecretMediaViewer.getInstance().isVisible()) {
@@ -1181,7 +1206,22 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         } else if (ArticleViewer.hasInstance() && ArticleViewer.getInstance().isVisible()) {
             ArticleViewer.getInstance().close(false, true);
         }
-        passcodeView.onShow();
+        MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+        if (messageObject != null && messageObject.isRoundVideo()) {
+            MediaController.getInstance().cleanupPlayer(true, true);
+        }
+        passcodeView.onShow(fingerprint, animated, x, y, () -> {
+            actionBarLayout.setVisibility(View.INVISIBLE);
+            if (AndroidUtilities.isTablet()) {
+                if (layersActionBarLayout.getVisibility() == View.VISIBLE) {
+                    layersActionBarLayout.setVisibility(View.INVISIBLE);
+                }
+                rightActionBarLayout.setVisibility(View.INVISIBLE);
+            }
+            if (onShow != null) {
+                onShow.run();
+            }
+        }, onStart);
         SharedConfig.isWaitingForPasscodeEnter = true;
         drawerLayoutContainer.setAllowOpenDrawer(false, false);
         passcodeView.setDelegate(() -> {
@@ -1202,13 +1242,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 rightActionBarLayout.setVisibility(View.VISIBLE);
             }
         });
-        actionBarLayout.setVisibility(View.INVISIBLE);
-        if (AndroidUtilities.isTablet()) {
-            if (layersActionBarLayout.getVisibility() == View.VISIBLE) {
-                layersActionBarLayout.setVisibility(View.INVISIBLE);
-            }
-            rightActionBarLayout.setVisibility(View.INVISIBLE);
-        }
     }
 
     private boolean handleIntent(Intent intent, boolean isNew, boolean restore, boolean fromPassword) {
@@ -1220,7 +1253,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             }
             return true;
         }
-        //FileLog.d("UI create13 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         if (PhotoViewer.hasInstance() && PhotoViewer.getInstance().isVisible()) {
             if (intent == null || !Intent.ACTION_MAIN.equals(intent.getAction())) {
                 PhotoViewer.getInstance().closePhoto(false, true);
@@ -1232,7 +1264,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         switchToAccount(intentAccount[0], true);
         boolean isVoipIntent = action != null && action.equals("voip");
         if (!fromPassword && (AndroidUtilities.needShowPasscode(true) || SharedConfig.isWaitingForPasscodeEnter)) {
-            showPasscodeActivity();
+            showPasscodeActivity(true, false, -1, -1, null, null);
             UserConfig.getInstance(currentAccount).saveConfig(false);
             if (!isVoipIntent) {
                 passcodeSaveIntent = intent;
@@ -1242,7 +1274,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             }
         }
         boolean pushOpened = false;
-        //FileLog.d("UI create14 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         int push_user_id = 0;
         int push_chat_id = 0;
         int push_enc_id = 0;
@@ -1278,6 +1309,9 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         exportingChatUri = null;
         contactsToSend = null;
         contactsToSendUri = null;
+        importingStickers = null;
+        importingStickersEmoji = null;
+        importingStickersSoftware = null;
 
         if ((flags & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) {
             if (intent != null && intent.getAction() != null && !restore) {
@@ -1430,6 +1464,17 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                     if (error) {
                         Toast.makeText(this, "Unsupported content", Toast.LENGTH_SHORT).show();
                     }
+                } else if ("org.telegram.messenger.CREATE_STICKER_PACK".equals(intent.getAction())) {
+                    try {
+                        importingStickers = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                        importingStickersEmoji = intent.getStringArrayListExtra("STICKER_EMOJIS");
+                        importingStickersSoftware = intent.getStringExtra("IMPORTER");
+                    } catch (Throwable e) {
+                        FileLog.e(e);
+                        importingStickers = null;
+                        importingStickersEmoji = null;
+                        importingStickersSoftware = null;
+                    }
                 } else if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {
                     boolean error = false;
                     try {
@@ -1560,6 +1605,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                         Integer channelId = null;
                         Integer threadId = null;
                         Integer commentId = null;
+                        int videoTimestamp = -1;
                         boolean hasUrl = false;
                         final String scheme = data.getScheme();
                         if (scheme != null) {
@@ -1582,11 +1628,16 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
 
                                                     }
                                                     wallPaper.slug = null;
-                                                } else if (wallPaper.slug != null && wallPaper.slug.length() == 13 && wallPaper.slug.charAt(6) == '-') {
+                                                } else if (wallPaper.slug != null && wallPaper.slug.length() >= 13 && AndroidUtilities.isValidWallChar(wallPaper.slug.charAt(6))) {
                                                     try {
                                                         wallPaper.settings.background_color = Integer.parseInt(wallPaper.slug.substring(0, 6), 16) | 0xff000000;
-                                                        wallPaper.settings.second_background_color = Integer.parseInt(wallPaper.slug.substring(7), 16) | 0xff000000;
-                                                        wallPaper.settings.rotation = 45;
+                                                        wallPaper.settings.second_background_color = Integer.parseInt(wallPaper.slug.substring(7, 13), 16) | 0xff000000;
+                                                        if (wallPaper.slug.length() >= 20 && AndroidUtilities.isValidWallChar(wallPaper.slug.charAt(13))) {
+                                                            wallPaper.settings.third_background_color = Integer.parseInt(wallPaper.slug.substring(14, 20), 16) | 0xff000000;
+                                                        }
+                                                        if (wallPaper.slug.length() == 27 && AndroidUtilities.isValidWallChar(wallPaper.slug.charAt(20))) {
+                                                            wallPaper.settings.fourth_background_color = Integer.parseInt(wallPaper.slug.substring(21), 16) | 0xff000000;
+                                                        }
                                                     } catch (Exception ignore) {
 
                                                     }
@@ -1624,9 +1675,14 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                                                         String bgColor = data.getQueryParameter("bg_color");
                                                         if (!TextUtils.isEmpty(bgColor)) {
                                                             wallPaper.settings.background_color = Integer.parseInt(bgColor.substring(0, 6), 16) | 0xff000000;
-                                                            if (bgColor.length() > 6) {
-                                                                wallPaper.settings.second_background_color = Integer.parseInt(bgColor.substring(7), 16) | 0xff000000;
-                                                                wallPaper.settings.rotation = 45;
+                                                            if (bgColor.length() >= 13) {
+                                                                wallPaper.settings.second_background_color = Integer.parseInt(bgColor.substring(7, 13), 16) | 0xff000000;
+                                                                if (bgColor.length() >= 20 && AndroidUtilities.isValidWallChar(bgColor.charAt(13))) {
+                                                                    wallPaper.settings.third_background_color = Integer.parseInt(bgColor.substring(14, 20), 16) | 0xff000000;
+                                                                }
+                                                                if (bgColor.length() == 27 && AndroidUtilities.isValidWallChar(bgColor.charAt(20))) {
+                                                                    wallPaper.settings.fourth_background_color = Integer.parseInt(bgColor.substring(21), 16) | 0xff000000;
+                                                                }
                                                             }
                                                         } else {
                                                             wallPaper.settings.background_color = 0xffffffff;
@@ -1705,6 +1761,18 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                                                         if (messageId == 0) {
                                                             messageId = null;
                                                         }
+                                                    }
+                                                }
+                                                if (messageId != null && segments.contains("video")) {
+                                                    String str = data.getQuery();
+                                                    DateFormat dateFormat = new SimpleDateFormat("mm:ss");
+                                                    Date reference = null;
+                                                    try {
+                                                        reference = dateFormat.parse("00:00");
+                                                        Date date = dateFormat.parse(str);
+                                                        videoTimestamp = (int) ((date.getTime() - reference.getTime()) / 1000L);
+                                                    } catch (ParseException e) {
+                                                        e.printStackTrace();
                                                     }
                                                 }
                                                 botUser = data.getQueryParameter("start");
@@ -1794,11 +1862,16 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
 
                                             }
                                             wallPaper.slug = null;
-                                        } else if (wallPaper.slug != null && wallPaper.slug.length() == 13 && wallPaper.slug.charAt(6) == '-') {
+                                        } else if (wallPaper.slug != null && wallPaper.slug.length() >= 13 && AndroidUtilities.isValidWallChar(wallPaper.slug.charAt(6))) {
                                             try {
                                                 wallPaper.settings.background_color = Integer.parseInt(wallPaper.slug.substring(0, 6), 16) | 0xff000000;
-                                                wallPaper.settings.second_background_color = Integer.parseInt(wallPaper.slug.substring(7), 16) | 0xff000000;
-                                                wallPaper.settings.rotation = 45;
+                                                wallPaper.settings.second_background_color = Integer.parseInt(wallPaper.slug.substring(7, 13), 16) | 0xff000000;
+                                                if (wallPaper.slug.length() >= 20 && AndroidUtilities.isValidWallChar(wallPaper.slug.charAt(13))) {
+                                                    wallPaper.settings.third_background_color = Integer.parseInt(wallPaper.slug.substring(14, 20), 16) | 0xff000000;
+                                                }
+                                                if (wallPaper.slug.length() == 27 && AndroidUtilities.isValidWallChar(wallPaper.slug.charAt(20))) {
+                                                    wallPaper.settings.fourth_background_color = Integer.parseInt(wallPaper.slug.substring(21), 16) | 0xff000000;
+                                                }
                                             } catch (Exception ignore) {
 
                                             }
@@ -1831,9 +1904,14 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                                                 String bgColor = data.getQueryParameter("bg_color");
                                                 if (!TextUtils.isEmpty(bgColor)) {
                                                     wallPaper.settings.background_color = Integer.parseInt(bgColor.substring(0, 6), 16) | 0xff000000;
-                                                    if (bgColor.length() > 6) {
-                                                        wallPaper.settings.second_background_color = Integer.parseInt(bgColor.substring(7), 16) | 0xff000000;
-                                                        wallPaper.settings.rotation = 45;
+                                                    if (bgColor.length() >= 13) {
+                                                        wallPaper.settings.second_background_color = Integer.parseInt(bgColor.substring(8, 13), 16) | 0xff000000;
+                                                        if (bgColor.length() >= 20 && AndroidUtilities.isValidWallChar(bgColor.charAt(13))) {
+                                                            wallPaper.settings.third_background_color = Integer.parseInt(bgColor.substring(14, 20), 16) | 0xff000000;
+                                                        }
+                                                        if (bgColor.length() == 27 && AndroidUtilities.isValidWallChar(bgColor.charAt(20))) {
+                                                            wallPaper.settings.fourth_background_color = Integer.parseInt(bgColor.substring(21), 16) | 0xff000000;
+                                                        }
                                                     }
                                                 }
                                             } catch (Exception ignore) {
@@ -2021,7 +2099,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                                     .setActionToken(intent.getStringExtra(EXTRA_ACTION_TOKEN))
                                     .setActionStatus(success ? Action.Builder.STATUS_TYPE_COMPLETED : Action.Builder.STATUS_TYPE_FAILED)
                                     .build();
-                            FirebaseUserActions.getInstance().end(assistAction);
+                            FirebaseUserActions.getInstance(this).end(assistAction);
                             intent.removeExtra(EXTRA_ACTION_TOKEN);
                         }
                         if (code != null || UserConfig.getInstance(currentAccount).isClientActivated()) {
@@ -2034,7 +2112,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                                 if (message != null && message.startsWith("@")) {
                                     message = " " + message;
                                 }
-                                runLinkRequest(intentAccount[0], username, group, sticker, botUser, botChat, message, hasUrl, messageId, channelId, threadId, commentId, game, auth, lang, unsupportedUrl, code, login, wallPaper, theme, voicechat, 0);
+                                runLinkRequest(intentAccount[0], username, group, sticker, botUser, botChat, message, hasUrl, messageId, channelId, threadId, commentId, game, auth, lang, unsupportedUrl, code, login, wallPaper, theme, voicechat, 0, videoTimestamp);
                             } else {
                                 try (Cursor cursor = getContentResolver().query(intent.getData(), null, null, null, null)) {
                                     if (cursor != null) {
@@ -2103,7 +2181,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 }
             }
         }
-        //FileLog.d("UI create15 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         if (UserConfig.getInstance(currentAccount).isClientActivated()) {
             if (searchQuery != null) {
                 final BaseFragment lastFragment = actionBarLayout.getLastFragment();
@@ -2203,6 +2280,14 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 pushOpened = false;
             } else if (exportingChatUri != null) {
                 runImportRequest(exportingChatUri, documentsUrisArray);
+            } else if (importingStickers != null) {
+                AndroidUtilities.runOnUIThread(() -> {
+                    if (!actionBarLayout.fragmentsStack.isEmpty()) {
+                        BaseFragment fragment = actionBarLayout.fragmentsStack.get(0);
+                        fragment.showDialog(new StickersAlert(this, importingStickersSoftware, importingStickers, importingStickersEmoji));
+                    }
+                });
+                pushOpened = false;
             } else if (videoPath != null || photoPathsArray != null || sendingText != null || documentsPathsArray != null || contactsToSend != null || documentsUrisArray != null) {
                 if (!AndroidUtilities.isTablet()) {
                     NotificationCenter.getInstance(intentAccount[0]).postNotificationName(NotificationCenter.closeChats);
@@ -2232,7 +2317,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                     fragment = new ActionIntroActivity(ActionIntroActivity.ACTION_TYPE_CHANGE_PHONE_NUMBER);
                     closePrevious = true;
                 } else if (open_settings == 6) {
-                    fragment = new EditWidgetActivity(open_widget_edit_type, open_widget_edit, true);
+                    fragment = new EditWidgetActivity(open_widget_edit_type, open_widget_edit);
                 } else {
                     fragment = null;
                 }
@@ -2369,7 +2454,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 pushOpened = true;
             }
         }
-        //FileLog.d("UI create16 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         if (!pushOpened && !isNew) {
             if (AndroidUtilities.isTablet()) {
                 if (!UserConfig.getInstance(currentAccount).isClientActivated()) {
@@ -2410,16 +2494,14 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 rightActionBarLayout.showLastFragment();
             }
         }
-        //FileLog.d("UI create17 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         if (isVoipIntent) {
             VoIPFragment.show(this, intentAccount[0]);
         }
-        if (!showGroupVoip && GroupCallActivity.groupCallInstance != null && (intent == null || !Intent.ACTION_MAIN.equals(intent.getAction()))) {
+        if (!showGroupVoip && (intent == null || !Intent.ACTION_MAIN.equals(intent.getAction())) && GroupCallActivity.groupCallInstance != null) {
             GroupCallActivity.groupCallInstance.dismiss();
         }
 
         intent.setAction(null);
-        //FileLog.d("UI create18 time = " + (SystemClock.elapsedRealtime() - ApplicationLoader.startTime));
         return pushOpened;
     }
 
@@ -2671,13 +2753,14 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                                 final TLRPC.TL_wallPaper wallPaper,
                                 final String theme,
                                 final String voicechat,
-                                final int state) {
+                                final int state,
+                                final int videoTimestamp) {
         if (state == 0 && UserConfig.getActivatedAccountsCount() >= 2 && auth != null) {
             AlertsCreator.createAccountSelectDialog(this, account -> {
                 if (account != intentAccount) {
                     switchToAccount(account, true);
                 }
-                runLinkRequest(account, username, group, sticker, botUser, botChat, message, hasUrl, messageId, channelId, threadId, commentId, game, auth, lang, unsupportedUrl, code, loginToken, wallPaper, theme, voicechat, 1);
+                runLinkRequest(account, username, group, sticker, botUser, botChat, message, hasUrl, messageId, channelId, threadId, commentId, game, auth, lang, unsupportedUrl, code, loginToken, wallPaper, theme, voicechat, 1, videoTimestamp);
             }).show();
             return;
         } else if (code != null) {
@@ -2826,6 +2909,9 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                             }
                             if (voicechat != null) {
                                 args.putString("voicechat", voicechat);
+                            }
+                            if (videoTimestamp >= 0) {
+                                args.putInt("video_timestamp", videoTimestamp);
                             }
                             BaseFragment lastFragment = !mainFragmentsStack.isEmpty() && voicechat == null ? mainFragmentsStack.get(mainFragmentsStack.size() - 1) : null;
                             if (lastFragment == null || MessagesController.getInstance(intentAccount).checkCanOpenChat(args, lastFragment)) {
@@ -3026,7 +3112,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                 StickersAlert alert;
                 if (fragment instanceof ChatActivity) {
                     ChatActivity chatActivity = (ChatActivity) fragment;
-                    alert = new StickersAlert(LaunchActivity.this, fragment, stickerset, null, chatActivity.getChatActivityEnterView());
+                    alert = new StickersAlert(LaunchActivity.this, fragment, stickerset, null, chatActivity.getChatActivityEnterViewForStickers());
                     alert.setCalcMandatoryInsets(chatActivity.isKeyboardVisible());
                 } else {
                     alert = new StickersAlert(LaunchActivity.this, fragment, stickerset, null, null);
@@ -3145,8 +3231,13 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             boolean ok = false;
             if (TextUtils.isEmpty(wallPaper.slug)) {
                 try {
-                    WallpapersListActivity.ColorWallpaper colorWallpaper = new WallpapersListActivity.ColorWallpaper(Theme.COLOR_BACKGROUND_SLUG, wallPaper.settings.background_color, wallPaper.settings.second_background_color, AndroidUtilities.getWallpaperRotation(wallPaper.settings.rotation, false));
-                    ThemePreviewActivity wallpaperActivity = new ThemePreviewActivity(colorWallpaper, null);
+                    WallpapersListActivity.ColorWallpaper colorWallpaper;
+                    if (wallPaper.settings.third_background_color != 0) {
+                        colorWallpaper = new WallpapersListActivity.ColorWallpaper(Theme.COLOR_BACKGROUND_SLUG, wallPaper.settings.background_color, wallPaper.settings.second_background_color, wallPaper.settings.third_background_color, wallPaper.settings.fourth_background_color);
+                    } else {
+                        colorWallpaper = new WallpapersListActivity.ColorWallpaper(Theme.COLOR_BACKGROUND_SLUG, wallPaper.settings.background_color, wallPaper.settings.second_background_color, AndroidUtilities.getWallpaperRotation(wallPaper.settings.rotation, false));
+                    }
+                    ThemePreviewActivity wallpaperActivity = new ThemePreviewActivity(colorWallpaper, null, true, false);
                     AndroidUtilities.runOnUIThread(() -> presentFragment(wallpaperActivity));
                     ok = true;
                 } catch (Exception e) {
@@ -3168,13 +3259,13 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                         TLRPC.TL_wallPaper res = (TLRPC.TL_wallPaper) response;
                         Object object;
                         if (res.pattern) {
-                            WallpapersListActivity.ColorWallpaper colorWallpaper = new WallpapersListActivity.ColorWallpaper(res.slug, wallPaper.settings.background_color, wallPaper.settings.second_background_color, AndroidUtilities.getWallpaperRotation(wallPaper.settings.rotation, false), wallPaper.settings.intensity / 100.0f, wallPaper.settings.motion, null);
+                            WallpapersListActivity.ColorWallpaper colorWallpaper = new WallpapersListActivity.ColorWallpaper(res.slug, wallPaper.settings.background_color, wallPaper.settings.second_background_color, wallPaper.settings.third_background_color, wallPaper.settings.fourth_background_color, AndroidUtilities.getWallpaperRotation(wallPaper.settings.rotation, false), wallPaper.settings.intensity / 100.0f, wallPaper.settings.motion, null);
                             colorWallpaper.pattern = res;
                             object = colorWallpaper;
                         } else {
                             object = res;
                         }
-                        ThemePreviewActivity wallpaperActivity = new ThemePreviewActivity(object, null);
+                        ThemePreviewActivity wallpaperActivity = new ThemePreviewActivity(object, null, true, false);
                         wallpaperActivity.setInitialModes(wallPaper.settings.blur, wallPaper.settings.motion);
                         presentFragment(wallpaperActivity);
                     } else {
@@ -3425,11 +3516,170 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         return foundContacts;
     }
 
+    private void createUpdateUI() {
+        if (sideMenuContainer == null) {
+            return;
+        }
+        updateLayout = new FrameLayout(this) {
+
+            private Paint paint = new Paint();
+            private Matrix matrix = new Matrix();
+            private LinearGradient updateGradient;
+            private int lastGradientWidth;
+
+            @Override
+            protected void onDraw(Canvas canvas) {
+                if (updateGradient == null) {
+                    return;
+                }
+                paint.setColor(0xffffffff);
+                paint.setShader(updateGradient);
+                updateGradient.setLocalMatrix(matrix);
+                canvas.drawRect(0, 0, getMeasuredWidth(), getMeasuredHeight(), paint);
+                updateLayoutIcon.setBackgroundGradientDrawable(updateGradient);
+                updateLayoutIcon.draw(canvas);
+            }
+
+            @Override
+            protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+                int width = MeasureSpec.getSize(widthMeasureSpec);
+                if (lastGradientWidth != width) {
+                    updateGradient = new LinearGradient(0, 0, width, 0, new int[]{0xff69BF72, 0xff53B3AD}, new float[]{0.0f, 1.0f}, Shader.TileMode.CLAMP);
+                    lastGradientWidth = width;
+                }
+            }
+        };
+        updateLayout.setWillNotDraw(false);
+        updateLayout.setVisibility(View.INVISIBLE);
+        updateLayout.setTranslationY(AndroidUtilities.dp(44));
+        if (Build.VERSION.SDK_INT >= 21) {
+            updateLayout.setBackground(Theme.getSelectorDrawable(Theme.getColor(Theme.key_listSelector), null));
+        }
+        sideMenuContainer.addView(updateLayout, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 44, Gravity.LEFT | Gravity.BOTTOM));
+        updateLayout.setOnClickListener(v -> {
+            if (!SharedConfig.isAppUpdateAvailable()) {
+                return;
+            }
+            if (updateLayoutIcon.getIcon() == MediaActionDrawable.ICON_DOWNLOAD) {
+                FileLoader.getInstance(currentAccount).loadFile(SharedConfig.pendingAppUpdate.document, "update", 1, 1);
+                updateAppUpdateViews(true);
+            } else if (updateLayoutIcon.getIcon() == MediaActionDrawable.ICON_CANCEL) {
+                FileLoader.getInstance(currentAccount).cancelLoadFile(SharedConfig.pendingAppUpdate.document);
+                updateAppUpdateViews(true);
+            } else {
+                AndroidUtilities.openForView(SharedConfig.pendingAppUpdate.document, true, this);
+            }
+        });
+        updateLayoutIcon = new RadialProgress2(updateLayout);
+        updateLayoutIcon.setColors(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff);
+        updateLayoutIcon.setProgressRect(AndroidUtilities.dp(22), AndroidUtilities.dp(11), AndroidUtilities.dp(22 + 22), AndroidUtilities.dp(11 + 22));
+        updateLayoutIcon.setCircleRadius(AndroidUtilities.dp(11));
+        updateLayoutIcon.setAsMini();
+
+        updateTextView = new SimpleTextView(this);
+        updateTextView.setTextSize(15);
+        updateTextView.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"));
+        updateTextView.setText(LocaleController.getString("AppUpdate", R.string.AppUpdate));
+        updateTextView.setTextColor(0xffffffff);
+        updateTextView.setGravity(Gravity.LEFT);
+        updateLayout.addView(updateTextView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_VERTICAL, 74, 0, 0, 0));
+
+        updateSizeTextView = new TextView(this);
+        updateSizeTextView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
+        updateSizeTextView.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"));
+        updateSizeTextView.setGravity(Gravity.RIGHT);
+        updateSizeTextView.setTextColor(0xffffffff);
+        updateLayout.addView(updateSizeTextView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER_VERTICAL | Gravity.RIGHT, 0, 0, 17, 0));
+    }
+
+    private void updateAppUpdateViews(boolean animated) {
+        if (sideMenuContainer == null) {
+            return;
+        }
+        if (SharedConfig.isAppUpdateAvailable()) {
+            createUpdateUI();
+            updateSizeTextView.setText(AndroidUtilities.formatFileSize(SharedConfig.pendingAppUpdate.document.size));
+            String fileName = FileLoader.getAttachFileName(SharedConfig.pendingAppUpdate.document);
+            File path = FileLoader.getPathToAttach(SharedConfig.pendingAppUpdate.document, true);
+            boolean showSize;
+            if (path.exists()) {
+                updateLayoutIcon.setIcon(MediaActionDrawable.ICON_UPDATE, true, animated);
+                updateTextView.setText(LocaleController.getString("AppUpdateNow", R.string.AppUpdateNow));
+                showSize = false;
+            } else {
+                if (FileLoader.getInstance(currentAccount).isLoadingFile(fileName)) {
+                    updateLayoutIcon.setIcon(MediaActionDrawable.ICON_CANCEL, true, animated);
+                    Float p = ImageLoader.getInstance().getFileProgress(fileName);
+                    updateTextView.setText(LocaleController.formatString("AppUpdateDownloading", R.string.AppUpdateDownloading, (int) ((p != null ? p : 0.0f) * 100)));
+                    showSize = false;
+                } else {
+                    updateLayoutIcon.setIcon(MediaActionDrawable.ICON_DOWNLOAD, true, animated);
+                    updateTextView.setText(LocaleController.getString("AppUpdate", R.string.AppUpdate));
+                    showSize = true;
+                }
+            }
+            if (showSize) {
+                if (updateSizeTextView.getTag() != null) {
+                    if (animated) {
+                        updateSizeTextView.setTag(null);
+                        updateSizeTextView.animate().alpha(1.0f).scaleX(1.0f).scaleY(1.0f).setDuration(180).start();
+                    } else {
+                        updateSizeTextView.setAlpha(1.0f);
+                        updateSizeTextView.setScaleX(1.0f);
+                        updateSizeTextView.setScaleY(1.0f);
+                    }
+                }
+            } else {
+                if (updateSizeTextView.getTag() == null) {
+                    if (animated) {
+                        updateSizeTextView.setTag(1);
+                        updateSizeTextView.animate().alpha(0.0f).scaleX(0.0f).scaleY(0.0f).setDuration(180).start();
+                    } else {
+                        updateSizeTextView.setAlpha(0.0f);
+                        updateSizeTextView.setScaleX(0.0f);
+                        updateSizeTextView.setScaleY(0.0f);
+                    }
+                }
+            }
+            if (updateLayout.getTag() != null) {
+                return;
+            }
+            updateLayout.setVisibility(View.VISIBLE);
+            updateLayout.setTag(1);
+            if (animated) {
+                updateLayout.animate().translationY(0).setInterpolator(CubicBezierInterpolator.EASE_OUT).setListener(null).setDuration(180).start();
+            } else {
+                updateLayout.setTranslationY(0);
+            }
+            sideMenu.setPadding(0, 0, 0, AndroidUtilities.dp(44));
+        } else {
+            if (updateLayout == null || updateLayout.getTag() == null) {
+                return;
+            }
+            updateLayout.setTag(null);
+            if (animated) {
+                updateLayout.animate().translationY(AndroidUtilities.dp(44)).setInterpolator(CubicBezierInterpolator.EASE_OUT).setListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        if (updateLayout.getTag() == null) {
+                            updateLayout.setVisibility(View.INVISIBLE);
+                        }
+                    }
+                }).setDuration(180).start();
+            } else {
+                updateLayout.setTranslationY(AndroidUtilities.dp(44));
+                updateLayout.setVisibility(View.INVISIBLE);
+            }
+            sideMenu.setPadding(0, 0, 0, 0);
+        }
+    }
+
     public void checkAppUpdate(boolean force) {
         if (!force && BuildVars.DEBUG_VERSION || !force && !BuildVars.CHECK_UPDATES) {
             return;
         }
-        if (!force && Math.abs(System.currentTimeMillis() - UserConfig.getInstance(0).lastUpdateCheckTime) < MessagesController.getInstance(0).updateCheckDelay * 1000) {
+        if (!force && Math.abs(System.currentTimeMillis() - SharedConfig.lastUpdateCheckTime) < MessagesController.getInstance(0).updateCheckDelay * 1000) {
             return;
         }
         TLRPC.TL_help_getAppUpdate req = new TLRPC.TL_help_getAppUpdate();
@@ -3443,25 +3693,26 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         }
         final int accountNum = currentAccount;
         ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> {
-            UserConfig.getInstance(0).lastUpdateCheckTime = System.currentTimeMillis();
-            UserConfig.getInstance(0).saveConfig(false);
+            SharedConfig.lastUpdateCheckTime = System.currentTimeMillis();
+            SharedConfig.saveConfig();
             if (response instanceof TLRPC.TL_help_appUpdate) {
                 final TLRPC.TL_help_appUpdate res = (TLRPC.TL_help_appUpdate) response;
                 AndroidUtilities.runOnUIThread(() -> {
-                    if (res.can_not_skip) {
-                        UserConfig.getInstance(0).pendingAppUpdate = res;
-                        UserConfig.getInstance(0).pendingAppUpdateBuildVersion = BuildVars.BUILD_VERSION;
-                        try {
-                            PackageInfo packageInfo = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
-                            UserConfig.getInstance(0).pendingAppUpdateInstallTime = Math.max(packageInfo.lastUpdateTime, packageInfo.firstInstallTime);
-                        } catch (Exception e) {
-                            FileLog.e(e);
-                            UserConfig.getInstance(0).pendingAppUpdateInstallTime = 0;
+                    if (SharedConfig.pendingAppUpdate != null && SharedConfig.pendingAppUpdate.version.equals(res.version)) {
+                        return;
+                    }
+                    if (SharedConfig.setNewAppVersionAvailable(res)) {
+                        if (res.can_not_skip) {
+                            showUpdateActivity(accountNum, res, false);
+                        } else {
+                            drawerLayoutAdapter.notifyDataSetChanged();
+                            try {
+                                (new UpdateAppAlertDialog(LaunchActivity.this, res, accountNum)).show();
+                            } catch (Exception e) {
+                                FileLog.e(e);
+                            }
                         }
-                        UserConfig.getInstance(0).saveConfig(false);
-                        showUpdateActivity(accountNum, res, false);
-                    } else {
-                        (new UpdateAppAlertDialog(LaunchActivity.this, res, accountNum)).show();
+                        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.appUpdateAvailable);
                     }
                 });
             }
@@ -3725,10 +3976,13 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.openArticle);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.hasNewContactsToImport);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.needShowPlayServicesAlert);
-            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileDidLoad);
-            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileDidFailToLoad);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileLoaded);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileLoadProgressChanged);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileLoadFailed);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.historyImportProgressChanged);
             NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.groupCallUpdated);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.stickersImportComplete);
+            NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.newSuggestionsAvailable);
         }
 
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.needShowAlert);
@@ -3743,6 +3997,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.notificationsCountUpdated);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.screenStateChanged);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.showBulletin);
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.appUpdateAvailable);
     }
 
     public void presentFragment(BaseFragment fragment) {
@@ -3789,7 +4044,15 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == PLAY_SERVICES_REQUEST_CHECK_SETTINGS) {
+        if (requestCode == SCREEN_CAPTURE_REQUEST_CODE) {
+            if (resultCode == Activity.RESULT_OK) {
+                VoIPService service = VoIPService.getSharedInstance();
+                if (service != null && service.groupCall != null) {
+                    VideoCapturerDevice.mediaProjectionPermissionResultData = data;
+                    service.createCaptureDevice(true);
+                }
+            }
+        } else if (requestCode == PLAY_SERVICES_REQUEST_CHECK_SETTINGS) {
             LocationController.getInstance(currentAccount).startFusedLocationRequest(resultCode == Activity.RESULT_OK);
         } else {
             ThemeEditorView editorView = ThemeEditorView.getInstance();
@@ -3825,7 +4088,15 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
 
         boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
 
-        if (requestCode == 4) {
+        if (requestCode == 104) {
+            if (granted) {
+                if (GroupCallActivity.groupCallInstance != null) {
+                    GroupCallActivity.groupCallInstance.enableCamera();
+                }
+            } else {
+                showPermissionErrorAlert(LocaleController.getString("VoipNeedCameraPermission", R.string.VoipNeedCameraPermission));
+            }
+        } else if (requestCode == 4) {
             if (!granted) {
                 showPermissionErrorAlert(LocaleController.getString("PermissionStorage", R.string.PermissionStorage));
             } else {
@@ -3940,6 +4211,9 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         Browser.bindCustomTabsService(this);
         ApplicationLoader.mainInterfaceStopped = false;
         GroupCallPip.updateVisibility(this);
+        if (GroupCallActivity.groupCallInstance != null) {
+            GroupCallActivity.groupCallInstance.onResume();
+        }
     }
 
     @Override
@@ -3948,6 +4222,9 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         Browser.unbindCustomTabsService(this);
         ApplicationLoader.mainInterfaceStopped = true;
         GroupCallPip.updateVisibility(this);
+        if (GroupCallActivity.groupCallInstance != null) {
+            GroupCallActivity.groupCallInstance.onPause();
+        }
     }
 
     @Override
@@ -4024,7 +4301,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         checkFreeDiscSpace();
         MediaController.checkGallery();
         onPasscodeResume();
-        if (passcodeView.getVisibility() != View.VISIBLE) {
+        if (passcodeView == null || passcodeView.getVisibility() != View.VISIBLE) {
             actionBarLayout.onResume();
             if (AndroidUtilities.isTablet()) {
                 rightActionBarLayout.onResume();
@@ -4052,8 +4329,8 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         }
         if (UserConfig.getInstance(UserConfig.selectedAccount).unacceptedTermsOfService != null) {
             showTosActivity(UserConfig.selectedAccount, UserConfig.getInstance(UserConfig.selectedAccount).unacceptedTermsOfService);
-        } else if (UserConfig.getInstance(0).pendingAppUpdate != null) {
-            showUpdateActivity(UserConfig.selectedAccount, UserConfig.getInstance(0).pendingAppUpdate, true);
+        } else if (SharedConfig.pendingAppUpdate != null && SharedConfig.pendingAppUpdate.can_not_skip) {
+            showUpdateActivity(UserConfig.selectedAccount, SharedConfig.pendingAppUpdate, true);
         }
         checkAppUpdate(false);
 
@@ -4196,6 +4473,9 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                     child.invalidate();
                 }
             }
+            if (backgroundTablet != null) {
+                backgroundTablet.setBackgroundImage(Theme.getCachedWallpaper(), Theme.isWallpaperMotion());
+            }
         } else if (id == NotificationCenter.didSetPasscode) {
             if (SharedConfig.passcodeHash.length() > 0 && !SharedConfig.allowScreenCapture) {
                 try {
@@ -4328,6 +4608,8 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                         FileLog.e(e2);
                     }
                 }
+            } else {
+                DrawerProfileCell.switchingTheme = false;
             }
             Theme.ThemeInfo theme = (Theme.ThemeInfo) args[0];
             boolean nigthTheme = (Boolean) args[1];
@@ -4358,9 +4640,15 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             } catch (Throwable ignore) {
 
             }
-        } else if (id == NotificationCenter.fileDidLoad) {
+        } else if (id == NotificationCenter.fileLoaded) {
+            String path = (String) args[0];
+            if (SharedConfig.isAppUpdateAvailable()) {
+                String name = FileLoader.getAttachFileName(SharedConfig.pendingAppUpdate.document);
+                if (name.equals(path)) {
+                    updateAppUpdateViews(true);
+                }
+            }
             if (loadingThemeFileName != null) {
-                String path = (String) args[0];
                 if (loadingThemeFileName.equals(path)) {
                     loadingThemeFileName = null;
                     File locFile = new File(ApplicationLoader.getFilesDirFixed(), "remote" + loadingTheme.id + ".attheme");
@@ -4395,7 +4683,6 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                     onThemeLoadFinish();
                 }
             } else if (loadingThemeWallpaperName != null) {
-                String path = (String) args[0];
                 if (loadingThemeWallpaperName.equals(path)) {
                     loadingThemeWallpaperName = null;
                     File file = (File) args[1];
@@ -4421,10 +4708,16 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                     }
                 }
             }
-        } else if (id == NotificationCenter.fileDidFailToLoad) {
+        } else if (id == NotificationCenter.fileLoadFailed) {
             String path = (String) args[0];
             if (path.equals(loadingThemeFileName) || path.equals(loadingThemeWallpaperName)) {
                 onThemeLoadFinish();
+            }
+            if (SharedConfig.isAppUpdateAvailable()) {
+                String name = FileLoader.getAttachFileName(SharedConfig.pendingAppUpdate.document);
+                if (name.equals(path)) {
+                    updateAppUpdateViews(true);
+                }
             }
         } else if (id == NotificationCenter.screenStateChanged) {
             if (ApplicationLoader.mainInterfacePaused) {
@@ -4441,6 +4734,10 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             if (args.length > 1 && !mainFragmentsStack.isEmpty()) {
                 AlertsCreator.processError(currentAccount, (TLRPC.TL_error) args[2], mainFragmentsStack.get(mainFragmentsStack.size() - 1), (TLObject) args[1]);
             }
+        } else if (id == NotificationCenter.stickersImportComplete) {
+            MediaDataController.getInstance(account).toggleStickerSet(this, (TLObject) args[0], 2, !mainFragmentsStack.isEmpty() ? mainFragmentsStack.get(mainFragmentsStack.size() - 1) : null, false, true);
+        } else if (id == NotificationCenter.newSuggestionsAvailable) {
+            sideMenu.invalidateViews();
         } else if (id == NotificationCenter.showBulletin) {
             if (!mainFragmentsStack.isEmpty()) {
                 int type = (int) args[0];
@@ -4481,6 +4778,20 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             }
         } else if (id == NotificationCenter.groupCallUpdated) {
             checkWasMutedByAdmin(false);
+        } else if (id == NotificationCenter.fileLoadProgressChanged) {
+            if (updateTextView != null && SharedConfig.isAppUpdateAvailable()) {
+                String location = (String) args[0];
+                String fileName = FileLoader.getAttachFileName(SharedConfig.pendingAppUpdate.document);
+                if (fileName != null && fileName.equals(location)) {
+                    Long loadedSize = (Long) args[1];
+                    Long totalSize = (Long) args[2];
+                    float loadProgress = loadedSize / (float) totalSize;
+                    updateLayoutIcon.setProgress(loadProgress, true);
+                    updateTextView.setText(LocaleController.formatString("AppUpdateDownloading", R.string.AppUpdateDownloading, (int) (loadProgress * 100)));
+                }
+            }
+        } else if (id == NotificationCenter.appUpdateAvailable) {
+            updateAppUpdateViews(mainFragmentsStack.size() == 1);
         }
     }
 
@@ -4588,6 +4899,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
 
     private void checkFreeDiscSpace() {
         SharedConfig.checkKeepMedia();
+        SharedConfig.checkLogsToDelete();
         if (Build.VERSION.SDK_INT >= 26) {
             return;
         }
@@ -4801,7 +5113,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                             if (BuildVars.LOGS_ENABLED) {
                                 FileLog.d("lock app");
                             }
-                            showPasscodeActivity();
+                            showPasscodeActivity(true, false, -1, -1, null, null);
                         } else {
                             if (BuildVars.LOGS_ENABLED) {
                                 FileLog.d("didn't pass lock check");
@@ -4837,7 +5149,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             lockRunnable = null;
         }
         if (AndroidUtilities.needShowPasscode(true)) {
-            showPasscodeActivity();
+            showPasscodeActivity(true, false, -1, -1, null, null);
         }
         if (SharedConfig.lastPauseTime != 0) {
             SharedConfig.lastPauseTime = 0;
@@ -4947,7 +5259,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
 
     @Override
     public void onBackPressed() {
-        if (passcodeView.getVisibility() == View.VISIBLE) {
+        if (passcodeView != null && passcodeView.getVisibility() == View.VISIBLE) {
             finish();
             return;
         }
@@ -5057,7 +5369,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
         int keyCode = event.getKeyCode();
         if (event.getAction() == KeyEvent.ACTION_DOWN && (event.getKeyCode() == KeyEvent.KEYCODE_VOLUME_UP || event.getKeyCode() == KeyEvent.KEYCODE_VOLUME_DOWN)) {
             if (VoIPService.getSharedInstance() != null) {
-                if (Build.VERSION.SDK_INT >= 31 && !SharedConfig.useMediaStream) {
+                if (Build.VERSION.SDK_INT >= 32) {
                     boolean oldValue = WebRtcAudioTrack.isSpeakerMuted();
                     AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
                     int minVolume = am.getStreamMinVolume(AudioManager.STREAM_VOICE_CALL);
@@ -5067,7 +5379,7 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
                         showVoiceChatTooltip(mute ? UndoView.ACTION_VOIP_SOUND_MUTED : UndoView.ACTION_VOIP_SOUND_UNMUTED);
                     }
                 }
-            } else if (!mainFragmentsStack.isEmpty() && (!PhotoViewer.hasInstance() || !PhotoViewer.getInstance().isVisible()) && event.getRepeatCount() == 0) {
+            } else if (CatogramConfig.INSTANCE.getPlayVideoOnVolume() && (!mainFragmentsStack.isEmpty() && (!PhotoViewer.hasInstance() || !PhotoViewer.getInstance().isVisible()) && event.getRepeatCount() == 0)) {
                 BaseFragment fragment = mainFragmentsStack.get(mainFragmentsStack.size() - 1);
                 if (fragment instanceof ChatActivity) {
                     if (((ChatActivity) fragment).maybePlayVisibleVideo()) {
@@ -5342,25 +5654,5 @@ public class LaunchActivity extends AppCompatActivity implements BillingProcesso
             }
         }
         drawerLayoutAdapter.notifyDataSetChanged();
-    }
-
-    @Override
-    public void onProductPurchased(String productId, TransactionDetails details) {
-        Toast.makeText(this, LocaleController.getString("CG_GooglePlay_Thanks", R.string.CG_GooglePlay_Thanks), Toast.LENGTH_LONG).show();
-    }
-
-    @Override
-    public void onPurchaseHistoryRestored() {
-
-    }
-
-    @Override
-    public void onBillingError(int errorCode, Throwable error) {
-
-    }
-
-    @Override
-    public void onBillingInitialized() {
-
     }
 }

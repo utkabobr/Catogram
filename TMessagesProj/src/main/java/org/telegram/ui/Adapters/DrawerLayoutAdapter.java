@@ -34,7 +34,6 @@ import org.telegram.ui.Components.SideMenultItemAnimator;
 import java.util.ArrayList;
 import java.util.Collections;
 
-import ua.itaysonlab.catogram.CatogramConfig;
 import ua.itaysonlab.catogram.double_bottom.DoubleBottomBridge;
 import ua.itaysonlab.catogram.double_bottom.DoubleBottomStorageBridge;
 
@@ -52,7 +51,7 @@ public class DrawerLayoutAdapter extends RecyclerListView.SelectionAdapter {
         mContext = context;
         itemAnimator = animator;
         accountsShown = UserConfig.getActivatedAccountsCount() > 1 && MessagesController.getGlobalMainSettings().getBoolean("accountsShown", true);
-        Theme.createDialogsResources(context);
+        Theme.createCommonDialogResources(context);
         resetItems();
         try {
             hasGps = ApplicationLoader.applicationContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS);
@@ -259,7 +258,7 @@ public class DrawerLayoutAdapter extends RecyclerListView.SelectionAdapter {
         int inviteIcon;
         int helpIcon;
         int peopleNearbyIcon;
-        if (CatogramConfig.INSTANCE.getForceNewYearDrawer() || eventType == 0) {
+        if ( eventType == 0) {
             newGroupIcon = R.drawable.menu_groups_ny;
             //newSecretIcon = R.drawable.menu_secret_ny;
             //newChannelIcon = R.drawable.menu_channel_ny;
@@ -270,7 +269,7 @@ public class DrawerLayoutAdapter extends RecyclerListView.SelectionAdapter {
             inviteIcon = R.drawable.menu_invite_ny;
             helpIcon = R.drawable.menu_help_ny;
             peopleNearbyIcon = R.drawable.menu_nearby_ny;
-        } else if (CatogramConfig.INSTANCE.getForceSVDrawer() || eventType == 1) {
+        } else if ( eventType == 1) {
             newGroupIcon = R.drawable.menu_groups_14;
             //newSecretIcon = R.drawable.menu_secret_14;
             //newChannelIcon = R.drawable.menu_broadcast_14;
@@ -281,7 +280,7 @@ public class DrawerLayoutAdapter extends RecyclerListView.SelectionAdapter {
             inviteIcon = R.drawable.menu_secret_ny;
             helpIcon = R.drawable.menu_help;
             peopleNearbyIcon = R.drawable.menu_secret_14;
-        } else if (CatogramConfig.INSTANCE.getForceHLDrawer() || eventType == 2) {
+        } else if ( eventType == 2) {
             newGroupIcon = R.drawable.menu_groups_hw;
             //newSecretIcon = R.drawable.menu_secret_hw;
             //newChannelIcon = R.drawable.menu_broadcast_hw;
@@ -355,7 +354,7 @@ public class DrawerLayoutAdapter extends RecyclerListView.SelectionAdapter {
         }
 
         public void bind(DrawerActionCell actionCell) {
-            actionCell.setTextAndIcon(text, icon);
+            actionCell.setTextAndIcon(id, text, icon);
         }
     }
 }

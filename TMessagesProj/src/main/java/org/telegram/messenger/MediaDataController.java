@@ -47,6 +47,7 @@ import androidx.core.graphics.drawable.IconCompat;
 
 import org.telegram.SQLite.SQLiteCursor;
 import org.telegram.SQLite.SQLiteDatabase;
+import org.telegram.SQLite.SQLiteException;
 import org.telegram.SQLite.SQLitePreparedStatement;
 import org.telegram.messenger.support.SparseLongArray;
 import org.telegram.tgnet.ConnectionsManager;
@@ -272,7 +273,7 @@ public class MediaDataController extends BaseController {
 
     public ArrayList<TLRPC.Document> getRecentStickers(int type) {
         ArrayList<TLRPC.Document> arrayList = recentStickers[type];
-        return new ArrayList<>(arrayList.subList(0, Math.min(arrayList.size(), ua.itaysonlab.catogram.CatogramConfig.INSTANCE.getFullRecentStickers() ? Integer.MAX_VALUE : 20)));
+        return new ArrayList<>(arrayList.subList(0, Math.min(arrayList.size(), Integer.MAX_VALUE)));
     }
 
     public ArrayList<TLRPC.Document> getRecentStickersNoCopy(int type) {
@@ -1841,7 +1842,7 @@ public class MediaDataController extends BaseController {
         if (thumb != null) {
             final ArrayList<TLRPC.Document> documents = stickerSet.documents;
             if (documents != null && !documents.isEmpty()) {
-                loadStickerSetThumbInternal(thumb, stickerSet, documents.get(0));
+                loadStickerSetThumbInternal(thumb, stickerSet, documents.get(0), stickerSet.set.thumb_version);
             }
         }
     }
@@ -1857,12 +1858,12 @@ public class MediaDataController extends BaseController {
             } else {
                 return;
             }
-            loadStickerSetThumbInternal(thumb, stickerSet, sticker);
+            loadStickerSetThumbInternal(thumb, stickerSet, sticker, stickerSet.set.thumb_version);
         }
     }
 
-    private void loadStickerSetThumbInternal(TLRPC.PhotoSize thumb, Object parentObject, TLRPC.Document sticker) {
-        final ImageLocation imageLocation = ImageLocation.getForSticker(thumb, sticker);
+    private void loadStickerSetThumbInternal(TLRPC.PhotoSize thumb, Object parentObject, TLRPC.Document sticker, int thumbVersion) {
+        final ImageLocation imageLocation = ImageLocation.getForSticker(thumb, sticker, thumbVersion);
         if (imageLocation != null) {
             final String ext = imageLocation.imageType == FileLoader.IMAGE_TYPE_LOTTIE ? "tgs" : "webp";
             getFileLoader().loadFile(imageLocation, parentObject, ext, 2, 1);
@@ -2600,7 +2601,9 @@ public class MediaDataController extends BaseController {
                 final ArrayList<MessageObject> objects = new ArrayList<>();
                 for (int a = 0; a < res.messages.size(); a++) {
                     TLRPC.Message message = res.messages.get(a);
-                    objects.add(new MessageObject(currentAccount, message, usersDict, true, true));
+                    MessageObject messageObject = new MessageObject(currentAccount, message, usersDict, true, true);
+                    messageObject.createStrippedThumb();
+                    objects.add(messageObject);
                 }
 
                 AndroidUtilities.runOnUIThread(() -> {
@@ -5220,7 +5223,7 @@ public class MediaDataController extends BaseController {
 
     //---------------- DRAFT END ----------------
 
-    private SparseArray<TLRPC.BotInfo> botInfos = new SparseArray<>();
+    private HashMap<String, TLRPC.BotInfo> botInfos = new HashMap<>();
     private LongSparseArray<TLRPC.Message> botKeyboards = new LongSparseArray<>();
     private SparseLongArray botKeyboardsByMids = new SparseLongArray();
 
@@ -5275,9 +5278,27 @@ public class MediaDataController extends BaseController {
         });
     }
 
-    public void loadBotInfo(final int uid, boolean cache, final int classGuid) {
+    private TLRPC.BotInfo loadBotInfoInternal(final int uid, final long dialogId) throws SQLiteException {
+        TLRPC.BotInfo botInfo = null;
+        SQLiteCursor cursor = getMessagesStorage().getDatabase().queryFinalized(String.format(Locale.US, "SELECT info FROM bot_info_v2 WHERE uid = %d AND dialogId = %d", uid, dialogId));
+        if (cursor.next()) {
+            NativeByteBuffer data;
+
+            if (!cursor.isNull(0)) {
+                data = cursor.byteBufferValue(0);
+                if (data != null) {
+                    botInfo = TLRPC.BotInfo.TLdeserialize(data, data.readInt32(false), false);
+                    data.reuse();
+                }
+            }
+        }
+        cursor.dispose();
+        return botInfo;
+    }
+
+    public void loadBotInfo(final int uid, final long dialogId, boolean cache, final int classGuid) {
         if (cache) {
-            TLRPC.BotInfo botInfo = botInfos.get(uid);
+            TLRPC.BotInfo botInfo = botInfos.get(uid + "_" + dialogId);
             if (botInfo != null) {
                 getNotificationCenter().postNotificationName(NotificationCenter.botInfoDidLoad, botInfo, classGuid);
                 return;
@@ -5285,21 +5306,7 @@ public class MediaDataController extends BaseController {
         }
         getMessagesStorage().getStorageQueue().postRunnable(() -> {
             try {
-                TLRPC.BotInfo botInfo = null;
-                SQLiteCursor cursor = getMessagesStorage().getDatabase().queryFinalized(String.format(Locale.US, "SELECT info FROM bot_info WHERE uid = %d", uid));
-                if (cursor.next()) {
-                    NativeByteBuffer data;
-
-                    if (!cursor.isNull(0)) {
-                        data = cursor.byteBufferValue(0);
-                        if (data != null) {
-                            botInfo = TLRPC.BotInfo.TLdeserialize(data, data.readInt32(false), false);
-                            data.reuse();
-                        }
-                    }
-                }
-                cursor.dispose();
-
+                TLRPC.BotInfo botInfo = loadBotInfoInternal(uid, dialogId);
                 if (botInfo != null) {
                     final TLRPC.BotInfo botInfoFinal = botInfo;
                     AndroidUtilities.runOnUIThread(() -> getNotificationCenter().postNotificationName(NotificationCenter.botInfoDidLoad, botInfoFinal, classGuid));
@@ -5350,19 +5357,48 @@ public class MediaDataController extends BaseController {
         }
     }
 
-    public void putBotInfo(final TLRPC.BotInfo botInfo) {
+    public void putBotInfo(long dialogId, TLRPC.BotInfo botInfo) {
         if (botInfo == null) {
             return;
         }
-        botInfos.put(botInfo.user_id, botInfo);
+        botInfos.put(botInfo.user_id + "_" + dialogId, botInfo);
         getMessagesStorage().getStorageQueue().postRunnable(() -> {
             try {
-                SQLitePreparedStatement state = getMessagesStorage().getDatabase().executeFast("REPLACE INTO bot_info(uid, info) VALUES(?, ?)");
+                SQLitePreparedStatement state = getMessagesStorage().getDatabase().executeFast("REPLACE INTO bot_info_v2 VALUES(?, ?, ?)");
                 state.requery();
                 NativeByteBuffer data = new NativeByteBuffer(botInfo.getObjectSize());
                 botInfo.serializeToStream(data);
                 state.bindInteger(1, botInfo.user_id);
-                state.bindByteBuffer(2, data);
+                state.bindLong(2, dialogId);
+                state.bindByteBuffer(3, data);
+                state.step();
+                data.reuse();
+                state.dispose();
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
+    }
+
+    public void updateBotInfo(long dialogId, TLRPC.TL_updateBotCommands update) {
+        TLRPC.BotInfo botInfo = botInfos.get(update.bot_id + "_" + dialogId);
+        if (botInfo != null) {
+            botInfo.commands = update.commands;
+            getNotificationCenter().postNotificationName(NotificationCenter.botInfoDidLoad, botInfo, 0);
+        }
+        getMessagesStorage().getStorageQueue().postRunnable(() -> {
+            try {
+                TLRPC.BotInfo info = loadBotInfoInternal(update.bot_id, dialogId);
+                if (info != null) {
+                    info.commands = update.commands;
+                }
+                SQLitePreparedStatement state = getMessagesStorage().getDatabase().executeFast("REPLACE INTO bot_info_v2 VALUES(?, ?, ?)");
+                state.requery();
+                NativeByteBuffer data = new NativeByteBuffer(info.getObjectSize());
+                info.serializeToStream(data);
+                state.bindInteger(1, info.user_id);
+                state.bindLong(2, dialogId);
+                state.bindByteBuffer(3, data);
                 state.step();
                 data.reuse();
                 state.dispose();

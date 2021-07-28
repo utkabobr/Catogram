@@ -47,6 +47,12 @@ import android.provider.CallLog;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.Settings;
+
+import androidx.core.content.FileProvider;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager.widget.ViewPager;
+
 import android.telephony.TelephonyManager;
 import android.text.Layout;
 import android.text.Selection;
@@ -88,11 +94,6 @@ import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import androidx.core.content.FileProvider;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
-import androidx.viewpager.widget.ViewPager;
-
 import com.android.internal.telephony.ITelephony;
 
 import org.telegram.PhoneFormat.PhoneFormat;
@@ -110,6 +111,7 @@ import org.telegram.ui.Components.BackgroundGradientDrawable;
 import org.telegram.ui.Components.ForegroundColorSpanThemable;
 import org.telegram.ui.Components.ForegroundDetector;
 import org.telegram.ui.Components.LayoutHelper;
+import org.telegram.ui.Components.MotionBackgroundDrawable;
 import org.telegram.ui.Components.PickerBottomLayout;
 import org.telegram.ui.Components.RecyclerListView;
 import org.telegram.ui.Components.ShareAlert;
@@ -149,7 +151,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import ua.itaysonlab.extras.CatogramExtras;
-import ua.itaysonlab.extras.CatogramFontLoader;
 
 public class AndroidUtilities {
 
@@ -187,10 +188,14 @@ public class AndroidUtilities {
     public static final RectF rectTmp = new RectF();
 
     public static Pattern WEB_URL = null;
+    public static Pattern BAD_CHARS_PATTERN = null;
+    public static Pattern BAD_CHARS_MESSAGE_PATTERN = null;
 
     static {
         try {
             final String GOOD_IRI_CHAR = "a-zA-Z0-9\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF";
+            BAD_CHARS_PATTERN = Pattern.compile("[\u2500-\u25ff]");
+            BAD_CHARS_MESSAGE_PATTERN = Pattern.compile("[\u0300-\u036f]+");
             final Pattern IP_ADDRESS = Pattern.compile(
                     "((25[0-5]|2[0-4][0-9]|[0-1][0-9]{2}|[1-9][0-9]|[1-9])\\.(25[0-5]|2[0-4]"
                             + "[0-9]|[0-1][0-9]{2}|[1-9][0-9]|[1-9]|0)\\.(25[0-5]|2[0-4][0-9]|[0-1]"
@@ -241,7 +246,17 @@ public class AndroidUtilities {
         if (text.contains("\u202D")) {
             return true;
         }
-        return text.contains("\u202E");
+        if (text.contains("\u202E")) {
+            return true;
+        }
+        try {
+            if (BAD_CHARS_PATTERN.matcher(text).find()) {
+                return true;
+            }
+        } catch (Throwable e) {
+            return true;
+        }
+        return false;
     }
 
     public static CharSequence ellipsizeCenterEnd(CharSequence str, String query, int availableWidth, TextPaint textPaint, int maxSymbols) {
@@ -576,6 +591,10 @@ public class AndroidUtilities {
                         bitmapColor = colors[0];
                     }
                 }
+            } else if (drawable instanceof MotionBackgroundDrawable) {
+                result[0] = result[2] = Color.argb(0x2D, 0, 0, 0);
+                result[1] = result[3] = Color.argb(0x3D, 0, 0, 0);
+                return result;
             }
         } catch (Exception e) {
             FileLog.e(e);
@@ -1218,7 +1237,7 @@ public class AndroidUtilities {
                 if (args.length < 2 || currentData == null) {
                     continue;
                 }
-                if (args[0].startsWith("FN") || args[0].startsWith("ORG") && TextUtils.isEmpty(currentData.name)) {
+                if (args[0].startsWith("FN") || args[0].startsWith("N") || args[0].startsWith("ORG") && TextUtils.isEmpty(currentData.name)) {
                     String nameEncoding = null;
                     String nameCharset = null;
                     String[] params = args[0].split(";");
@@ -1233,7 +1252,11 @@ public class AndroidUtilities {
                             nameEncoding = args2[1];
                         }
                     }
-                    currentData.name = args[1];
+                    if (args[0].startsWith("N")) {
+                        currentData.name = args[1].replace(';', ' ').trim();
+                    } else {
+                        currentData.name = args[1];
+                    }
                     if (nameEncoding != null && nameEncoding.equalsIgnoreCase("QUOTED-PRINTABLE")) {
                         byte[] bytes = decodeQuotedPrintable(getStringBytes(currentData.name));
                         if (bytes != null && bytes.length != 0) {
@@ -1289,32 +1312,20 @@ public class AndroidUtilities {
     }
 
     public static Typeface getTypeface(String assetPath) {
-        if (CatogramFontLoader.needRedirect(assetPath)) return CatogramFontLoader.redirect(assetPath);
         synchronized (typefaceCache) {
-            if (!typefaceCache.containsKey(assetPath)) {
-                try {
-                    Typeface t;
-                    if (Build.VERSION.SDK_INT >= 26) {
-                        Typeface.Builder builder = new Typeface.Builder(ApplicationLoader.applicationContext.getAssets(), assetPath);
-                        if (assetPath.contains("medium")) {
-                            builder.setWeight(700);
-                        }
-                        if (assetPath.contains("italic")) {
-                            builder.setItalic(true);
-                        }
-                        t = builder.build();
-                    } else {
-                        t = Typeface.createFromAsset(ApplicationLoader.applicationContext.getAssets(), assetPath);
-                    }
-                    typefaceCache.put(assetPath, t);
-                } catch (Exception e) {
-                    if (BuildVars.LOGS_ENABLED) {
-                        FileLog.e("Could not get typeface '" + assetPath + "' because " + e.getMessage());
-                    }
-                    return null;
-                }
+            switch (assetPath) {
+                case "fonts/rmediumitalic.ttf":
+                    return Typeface.create("sans-serif-medium", Typeface.BOLD_ITALIC);
+                case "fonts/ritalic.ttf":
+                    return Typeface.create("sans-serif-medium", Typeface.ITALIC);
+                case "fonts/rmono.ttf":
+                    return Typeface.MONOSPACE;
+                case "fonts/mw_bold.ttf":
+                    return Typeface.create("sans-serif", Typeface.BOLD);
+                default:
+                    return Typeface.create("sans-serif-medium", Typeface.NORMAL);
             }
-            return typefaceCache.get(assetPath);
+
         }
     }
 
@@ -1691,7 +1702,7 @@ public class AndroidUtilities {
     }
 
     public static int getPeerLayerVersion(int layer) {
-        return (layer >> 16) & 0xffff;
+        return Math.max(73, (layer >> 16) & 0xffff);
     }
 
     public static int setMyLayerVersion(int layer, int version) {
@@ -1707,6 +1718,9 @@ public class AndroidUtilities {
     }
 
     public static void runOnUIThread(Runnable runnable, long delay) {
+        if (ApplicationLoader.applicationHandler == null) {
+            return;
+        }
         if (delay == 0) {
             ApplicationLoader.applicationHandler.post(runnable);
         } else {
@@ -1715,7 +1729,14 @@ public class AndroidUtilities {
     }
 
     public static void cancelRunOnUIThread(Runnable runnable) {
+        if (ApplicationLoader.applicationHandler == null) {
+            return;
+        }
         ApplicationLoader.applicationHandler.removeCallbacks(runnable);
+    }
+
+    public static boolean isValidWallChar(char ch) {
+        return ch == '-' || ch == '~';
     }
 
     public static boolean isTablet() {
@@ -1727,7 +1748,7 @@ public class AndroidUtilities {
 
     public static boolean isSmallTablet() {
         float minSide = Math.min(displaySize.x, displaySize.y) / density;
-        return minSide <= 700;
+        return minSide <= 690;
     }
 
     public static int getMinTabletSide() {
@@ -2069,7 +2090,7 @@ public class AndroidUtilities {
             }
             SpannableStringBuilder spannableStringBuilder = new SpannableStringBuilder(stringBuilder);
             for (int a = 0; a < bolds.size() / 2; a++) {
-                spannableStringBuilder.setSpan(new TypefaceSpan(ua.itaysonlab.extras.CatogramExtras.getBold()), bolds.get(a * 2), bolds.get(a * 2 + 1), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                spannableStringBuilder.setSpan(new TypefaceSpan(AndroidUtilities.getTypeface("fonts/rmedium.ttf")), bolds.get(a * 2), bolds.get(a * 2 + 1), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
             return spannableStringBuilder;
         } catch (Exception e) {
@@ -2223,7 +2244,7 @@ public class AndroidUtilities {
         }
     }
 
-    private static File getAlbumDir(boolean secretChat) {
+    private static File getAlbumDir(boolean secretChat) { //TODO scoped storage
         if (secretChat || Build.VERSION.SDK_INT >= 23 && ApplicationLoader.applicationContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             return FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE);
         }
@@ -2756,15 +2777,7 @@ public class AndroidUtilities {
         }
     }
 
-    public static boolean openForView(MessageObject message, final Activity activity) {
-        File f = null;
-        String fileName = message.getFileName();
-        if (message.messageOwner.attachPath != null && message.messageOwner.attachPath.length() != 0) {
-            f = new File(message.messageOwner.attachPath);
-        }
-        if (f == null || !f.exists()) {
-            f = FileLoader.getPathToMessage(message.messageOwner);
-        }
+    public static boolean openForView(File f, String fileName, String mimeType, final Activity activity) {
         if (f != null && f.exists()) {
             String realMimeType = null;
             Intent intent = new Intent(Intent.ACTION_VIEW);
@@ -2775,9 +2788,7 @@ public class AndroidUtilities {
                 String ext = fileName.substring(idx + 1);
                 realMimeType = myMime.getMimeTypeFromExtension(ext.toLowerCase());
                 if (realMimeType == null) {
-                    if (message.type == 9 || message.type == 0) {
-                        realMimeType = message.getDocument().mime_type;
-                    }
+                    realMimeType = mimeType;
                     if (realMimeType == null || realMimeType.length() == 0) {
                         realMimeType = null;
                     }
@@ -2820,6 +2831,24 @@ public class AndroidUtilities {
             return true;
         }
         return false;
+    }
+
+    public static boolean openForView(MessageObject message, Activity activity) {
+        File f = null;
+        if (message.messageOwner.attachPath != null && message.messageOwner.attachPath.length() != 0) {
+            f = new File(message.messageOwner.attachPath);
+        }
+        if (f == null || !f.exists()) {
+            f = FileLoader.getPathToMessage(message.messageOwner);
+        }
+        String mimeType = message.type == 9 || message.type == 0 ? message.getMimeType() : null;
+        return openForView(f, message.getFileName(), mimeType, activity);
+    }
+
+    public static boolean openForView(TLRPC.Document document, boolean forceCache, Activity activity) {
+        String fileName = FileLoader.getAttachFileName(document);
+        File f = FileLoader.getPathToAttach(document, true);
+        return openForView(f, fileName, document.mime_type, activity);
     }
 
     public static CharSequence replaceNewLines(CharSequence original) {
@@ -3283,16 +3312,20 @@ public class AndroidUtilities {
     }
 
     public static int getPatternColor(int color) {
+        return getPatternColor(color, false);
+    }
+
+    public static int getPatternColor(int color, boolean alwaysDark) {
         float[] hsb = RGBtoHSB(Color.red(color), Color.green(color), Color.blue(color));
         if (hsb[1] > 0.0f || (hsb[2] < 1.0f && hsb[2] > 0.0f)) {
-            hsb[1] = Math.min(1.0f, hsb[1] + 0.05f + 0.1f * (1.0f - hsb[1]));
+            hsb[1] = Math.min(1.0f, hsb[1] + (alwaysDark ? 0.15f : 0.05f) + 0.1f * (1.0f - hsb[1]));
         }
-        if (hsb[2] > 0.5f) {
+        if (alwaysDark || hsb[2] > 0.5f) {
             hsb[2] = Math.max(0.0f, hsb[2] * 0.65f);
         } else {
             hsb[2] = Math.max(0.0f, Math.min(1.0f, 1.0f - hsb[2] * 0.65f));
         }
-        return HSBtoRGB(hsb[0], hsb[1], hsb[2]) & 0x66ffffff;
+        return HSBtoRGB(hsb[0], hsb[1], hsb[2]) & (alwaysDark ? 0x99ffffff : 0x66ffffff);
     }
 
     public static int getPatternSideColor(int color) {

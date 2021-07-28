@@ -44,9 +44,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.telegram.messenger.AndroidUtilities;
-import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.Emoji;
-import org.telegram.messenger.ImageLocation;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
@@ -449,21 +447,7 @@ public class PollVotesAlert extends BottomSheet {
         TLRPC.TL_messageMediaPoll mediaPoll = (TLRPC.TL_messageMediaPoll) messageObject.messageOwner.media;
         poll = mediaPoll.poll;
         Context context = parentFragment.getParentActivity();
-
-        TLRPC.Chat chat = parentFragment.getCurrentChat();
-        TLRPC.User user = parentFragment.getCurrentUser();
-        if (ChatObject.isChannel(chat)) {
-            peer = new TLRPC.TL_inputPeerChannel();
-            peer.channel_id = chat.id;
-            peer.access_hash = chat.access_hash;
-        } else if (chat != null) {
-            peer = new TLRPC.TL_inputPeerChat();
-            peer.chat_id = chat.id;
-        } else {
-            peer = new TLRPC.TL_inputPeerUser();
-            peer.user_id = user.id;
-            peer.access_hash = user.access_hash;
-        }
+        peer = parentFragment.getMessagesController().getInputPeer((int) message.getDialogId());
 
         ArrayList<VotesList> loadedVoters = new ArrayList<>();
         int count = mediaPoll.results.results.size();
@@ -1033,8 +1017,11 @@ public class PollVotesAlert extends BottomSheet {
         }
 
         @Override
-        public boolean isEnabled(int section, int row) {
-            return section != 0 && row != 0 && (queries == null || queries.isEmpty());
+        public boolean isEnabled(RecyclerView.ViewHolder holder, int section, int row) {
+            if (section == 0 || row == 0 || queries != null && !queries.isEmpty()) {
+                return false;
+            }
+            return true;
         }
 
         @Override

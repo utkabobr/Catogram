@@ -13,6 +13,7 @@ import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
@@ -206,39 +207,19 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
 
     private BlurBehindDrawable blurBehindDrawable;
 
+    float pinchStartDistance;
+
+    float pinchScale;
+
+    boolean isInPinchToZoomTouchMode;
+    boolean maybePinchToZoomTouchMode;
+
+    private int pointerId1, pointerId2;
+
+    @SuppressLint("ClickableViewAccessibility")
     public InstantCameraView(Context context, ChatActivity parentFragment) {
         super(context);
         parentView = parentFragment.getFragmentView();
-        setOnTouchListener((v, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_DOWN && baseFragment != null) {
-                if (videoPlayer != null) {
-                    boolean mute = !videoPlayer.isMuted();
-                    videoPlayer.setMute(mute);
-                    if (muteAnimation != null) {
-                        muteAnimation.cancel();
-                    }
-                    muteAnimation = new AnimatorSet();
-                    muteAnimation.playTogether(
-                            ObjectAnimator.ofFloat(muteImageView, View.ALPHA, mute ? 1.0f : 0.0f),
-                            ObjectAnimator.ofFloat(muteImageView, View.SCALE_X, mute ? 1.0f : 0.5f),
-                            ObjectAnimator.ofFloat(muteImageView, View.SCALE_Y, mute ? 1.0f : 0.5f));
-                    muteAnimation.addListener(new AnimatorListenerAdapter() {
-                        @Override
-                        public void onAnimationEnd(Animator animation) {
-                            if (animation.equals(muteAnimation)) {
-                                muteAnimation = null;
-                            }
-                        }
-                    });
-                    muteAnimation.setDuration(180);
-                    muteAnimation.setInterpolator(new DecelerateInterpolator());
-                    muteAnimation.start();
-                } else {
-                    baseFragment.checkRecordLocked(false);
-                }
-            }
-            return true;
-        });
         setWillNotDraw(false);
 
         baseFragment = parentFragment;
@@ -353,6 +334,19 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
         blurBehindDrawable = new BlurBehindDrawable(parentView, this);
     }
 
+    private boolean checkPointerIds(MotionEvent ev) {
+        if (ev.getPointerCount() < 2) {
+            return false;
+        }
+        if (pointerId1 == ev.getPointerId(0) && pointerId2 == ev.getPointerId(1)) {
+            return true;
+        }
+        if (pointerId1 == ev.getPointerId(1) && pointerId2 == ev.getPointerId(0)) {
+            return true;
+        }
+        return false;
+    }
+
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
         getParent().requestDisallowInterceptTouchEvent(true);
@@ -372,18 +366,18 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.FileDidUpload);
+        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.fileUploaded);
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.FileDidUpload);
+        NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.fileUploaded);
     }
 
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
-        if (id == NotificationCenter.FileDidUpload) {
+        if (id == NotificationCenter.fileUploaded) {
             final String location = (String) args[0];
             if (cameraFile != null && cameraFile.getAbsolutePath().equals(location)) {
                 file = (TLRPC.InputFile) args[1];
@@ -678,7 +672,7 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
                 if (videoEditedInfo.endTime > 0) {
                     videoEditedInfo.endTime *= 1000;
                 }
-                FileLoader.getInstance(currentAccount).cancelUploadFile(cameraFile.getAbsolutePath(), false);
+                FileLoader.getInstance(currentAccount).cancelFileUpload(cameraFile.getAbsolutePath(), false);
             } else {
                 videoEditedInfo.estimatedSize = Math.max(1, size);
             }
@@ -686,7 +680,7 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
             videoEditedInfo.encryptedFile = encryptedFile;
             videoEditedInfo.key = key;
             videoEditedInfo.iv = iv;
-            baseFragment.sendMedia(new MediaController.PhotoEntry(0, 0, 0, cameraFile.getAbsolutePath(), 0, true, 0, 0, 0), videoEditedInfo, notify, scheduleDate);
+            baseFragment.sendMedia(new MediaController.PhotoEntry(0, 0, 0, cameraFile.getAbsolutePath(), 0, true, 0, 0, 0), videoEditedInfo, notify, scheduleDate, false);
             if (scheduleDate != 0) {
                 startAnimation(false);
             }
@@ -895,7 +889,7 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
             }
 
             surfaceTexture.setDefaultBufferSize(previewSize.getWidth(), previewSize.getHeight());
-            cameraSession = new CameraSession(selectedCamera, previewSize, pictureSize, ImageFormat.JPEG);
+            cameraSession = new CameraSession(selectedCamera, previewSize, pictureSize, ImageFormat.JPEG, true);
             cameraThread.setCurrentSession(cameraSession);
             CameraController.getInstance().openRound(cameraSession, surfaceTexture, () -> {
                 if (cameraSession != null) {
@@ -1902,7 +1896,7 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
         }
 
         private void createKeyframeThumb() {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && frameCount % 33 == 0) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && SharedConfig.getDevicePerformanceClass() != SharedConfig.PERFORMANCE_CLASS_LOW && frameCount % 33 == 0) {
                 GenerateKeyframeThumbTask task = new GenerateKeyframeThumbTask();
                 generateKeyframeThumbsQueue.postRunnable(task);
             }
@@ -1984,13 +1978,13 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
                     if (send == 1) {
                         if (baseFragment.isInScheduleMode()) {
                             AlertsCreator.createScheduleDatePickerDialog(baseFragment.getParentActivity(), baseFragment.getDialogId(), (notify, scheduleDate) -> {
-                                baseFragment.sendMedia(new MediaController.PhotoEntry(0, 0, 0, videoFile.getAbsolutePath(), 0, true, 0, 0, 0), videoEditedInfo, notify, scheduleDate);
+                                baseFragment.sendMedia(new MediaController.PhotoEntry(0, 0, 0, videoFile.getAbsolutePath(), 0, true, 0, 0, 0), videoEditedInfo, notify, scheduleDate, false);
                                 startAnimation(false);
                             }, () -> {
                                 startAnimation(false);
                             });
                         } else {
-                            baseFragment.sendMedia(new MediaController.PhotoEntry(0, 0, 0, videoFile.getAbsolutePath(), 0, true, 0, 0, 0), videoEditedInfo, true, 0);
+                            baseFragment.sendMedia(new MediaController.PhotoEntry(0, 0, 0, videoFile.getAbsolutePath(), 0, true, 0, 0, 0), videoEditedInfo, true, 0, false);
                         }
                     } else {
                         videoPlayer = new VideoPlayer();
@@ -2051,7 +2045,7 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
                     MediaController.getInstance().requestAudioFocus(false);
                 });
             } else {
-                FileLoader.getInstance(currentAccount).cancelUploadFile(videoFile.getAbsolutePath(), false);
+                FileLoader.getInstance(currentAccount).cancelFileUpload(videoFile.getAbsolutePath(), false);
                 videoFile.delete();
             }
             EGL14.eglDestroySurface(eglDisplay, eglSurface);
@@ -2461,6 +2455,108 @@ public class InstantCameraView extends FrameLayout implements NotificationCenter
                 imageReceiver.setAlpha(oldAlpha);
                 canvas.restore();
             }
+        }
+    }
+
+
+    @Override
+    public boolean onTouchEvent(MotionEvent ev) {
+        if (ev.getAction() == MotionEvent.ACTION_DOWN && baseFragment != null) {
+            if (videoPlayer != null) {
+                boolean mute = !videoPlayer.isMuted();
+                videoPlayer.setMute(mute);
+                if (muteAnimation != null) {
+                    muteAnimation.cancel();
+                }
+                muteAnimation = new AnimatorSet();
+                muteAnimation.playTogether(
+                        ObjectAnimator.ofFloat(muteImageView, View.ALPHA, mute ? 1.0f : 0.0f),
+                        ObjectAnimator.ofFloat(muteImageView, View.SCALE_X, mute ? 1.0f : 0.5f),
+                        ObjectAnimator.ofFloat(muteImageView, View.SCALE_Y, mute ? 1.0f : 0.5f));
+                muteAnimation.addListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        if (animation.equals(muteAnimation)) {
+                            muteAnimation = null;
+                        }
+                    }
+                });
+                muteAnimation.setDuration(180);
+                muteAnimation.setInterpolator(new DecelerateInterpolator());
+                muteAnimation.start();
+            } else {
+                //baseFragment.checkRecordLocked(false);
+            }
+        }
+
+        if (ev.getActionMasked() == MotionEvent.ACTION_DOWN || ev.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) {
+            if (maybePinchToZoomTouchMode && !isInPinchToZoomTouchMode && ev.getPointerCount() == 2 && finishZoomTransition == null && recording) {
+                pinchStartDistance = (float) Math.hypot(ev.getX(1) - ev.getX(0), ev.getY(1) - ev.getY(0));
+
+                pinchScale = 1f;
+
+                pointerId1 = ev.getPointerId(0);
+                pointerId2 = ev.getPointerId(1);
+                isInPinchToZoomTouchMode = true;
+            }
+            if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                AndroidUtilities.rectTmp.set(cameraContainer.getX(), cameraContainer.getY(), cameraContainer.getX() + cameraContainer.getMeasuredWidth(), cameraContainer.getY() + cameraContainer.getMeasuredHeight());
+                maybePinchToZoomTouchMode = AndroidUtilities.rectTmp.contains(ev.getX(), ev.getY());
+            }
+            return true;
+        } else if (ev.getActionMasked() == MotionEvent.ACTION_MOVE && isInPinchToZoomTouchMode) {
+            int index1 = -1;
+            int index2 = -1;
+            for (int i = 0; i < ev.getPointerCount(); i++) {
+                if (pointerId1 == ev.getPointerId(i)) {
+                    index1 = i;
+                }
+                if (pointerId2 == ev.getPointerId(i)) {
+                    index2 = i;
+                }
+            }
+            if (index1 == -1 || index2 == -1) {
+                isInPinchToZoomTouchMode = false;
+
+                finishZoom();
+                return false;
+            }
+            pinchScale = (float) Math.hypot(ev.getX(index2) - ev.getX(index1), ev.getY(index2) - ev.getY(index1)) / pinchStartDistance;
+            float zoom = Math.min(1f, Math.max(0, pinchScale - 1f));
+
+            cameraSession.setZoom(zoom);
+        } else if ((ev.getActionMasked() == MotionEvent.ACTION_UP || (ev.getActionMasked() == MotionEvent.ACTION_POINTER_UP && checkPointerIds(ev)) || ev.getActionMasked() == MotionEvent.ACTION_CANCEL) && isInPinchToZoomTouchMode) {
+            isInPinchToZoomTouchMode = false;
+            finishZoom();
+        }
+        return true;
+    }
+
+    ValueAnimator finishZoomTransition;
+    public void finishZoom() {
+        if (finishZoomTransition != null) {
+            return;
+        }
+
+        float zoom = Math.min(1f, Math.max(0, pinchScale - 1f));
+
+        if (zoom > 0f) {
+            finishZoomTransition = ValueAnimator.ofFloat(zoom, 0);
+            finishZoomTransition.addUpdateListener(valueAnimator -> {
+                cameraSession.setZoom((float) valueAnimator.getAnimatedValue());
+            });
+            finishZoomTransition.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    if (finishZoomTransition != null) {
+                        finishZoomTransition = null;
+                    }
+                }
+            });
+
+            finishZoomTransition.setDuration(350);
+            finishZoomTransition.setInterpolator(CubicBezierInterpolator.DEFAULT);
+            finishZoomTransition.start();
         }
     }
 }
